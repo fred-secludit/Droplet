@@ -894,7 +894,7 @@ dpl_ssl_profile_post(dpl_ctx_t *ctx)
     }
   }
 
-  if (NULL != ctx->ssl_ca_list) {
+  if (ctx->ssl_ca_list != NULL) {
     if (!SSL_CTX_load_verify_locations(ctx->ssl_ctx, ctx->ssl_ca_list, NULL) || !SSL_CTX_set_default_verify_paths(ctx->ssl_ctx)) {
       unsigned long ssl_err = ERR_get_error();
       char buf[256];
