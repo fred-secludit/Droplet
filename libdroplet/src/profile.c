@@ -828,7 +828,7 @@ dpl_ssl_profile_post(dpl_ctx_t *ctx)
   else if (0 == ctx->cert_verif)
     SSL_CTX_set_verify(ctx->ssl_ctx, SSL_VERIFY_NONE, NULL);
 
-  if (NULL != ctx->ssl_crl_list) {
+  if (ctx->ssl_crl_list != NULL) {
     /* load CRL in the X509_STORE */
     X509_STORE *cert_store;
     X509_CRL *cert_crl; 
@@ -866,8 +866,6 @@ dpl_ssl_profile_post(dpl_ctx_t *ctx)
     SSL_CTX_set1_param(ctx->ssl_ctx, cert_verif_param);
     X509_VERIFY_PARAM_free(cert_verif_param);
   }
-
-  /* SSL_CTX_set_cert_verify_callback(ctx->ssl_ctx, ssl_verify_cert, ctx); */
 
   if (ctx->ssl_cert_file != NULL) {
     if (!SSL_CTX_use_certificate_chain_file(ctx->ssl_ctx, ctx->ssl_cert_file)) {

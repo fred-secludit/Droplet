@@ -50,6 +50,11 @@ extern "C" {
 #include <openssl/md5.h>
 #include <pthread.h>
 
+/* NOTE: For fix build issue on Ubuntu 10.04 and Centos 5 */
+#ifndef SSL_OP_NO_COMPRESSION
+#define SSL_OP_NO_COMPRESSION 0
+#endif
+
 /*
  * default values
  */
@@ -514,7 +519,7 @@ typedef struct dpl_ctx
   /* log */
   unsigned int trace_level;
   int trace_buffers;
-  int trace_binary;          /*!< default is trace ascii */ 
+  int trace_binary;          /*!< default is trace ascii */
   char *pricing;             /*!< might be NULL */
   unsigned int read_buf_size;
   char *encrypt_key;
