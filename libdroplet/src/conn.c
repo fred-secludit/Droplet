@@ -379,6 +379,12 @@ init_ssl_conn(dpl_ctx_t *ctx, dpl_conn_t *conn)
 
   SSL_set_bio(conn->ssl, conn->bio, conn->bio);
 
+  /* OCSP stapling */
+  if (1 == ctx->cert_ocsp) {
+    DPL_LOG(ctx, DPL_INFO, "adding OCSP stapling through TLS extension: %d", ctx->cert_ocsp);
+    SSL_set_tlsext_status_type(conn->ssl, TLSEXT_STATUSTYPE_ocsp);
+  }
+
   ret = SSL_connect(conn->ssl);
   if (ret <= 0) {
     int ret_ssl = 0;

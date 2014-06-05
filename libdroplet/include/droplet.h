@@ -48,6 +48,7 @@ extern "C" {
 #include <netinet/in.h>
 #include <openssl/ssl.h>
 #include <openssl/md5.h>
+#include <openssl/ocsp.h>
 #include <pthread.h>
 
 /* NOTE: For fix build issue on Ubuntu 10.04 and Centos 5 */
@@ -74,6 +75,8 @@ extern "C" {
 #define DPL_DEFAULT_SSL_CIPHER_LIST     "ALL:-aNULL:!LOW:!MEDIUM:!RC2:!3DES:!MD5:!DSS:!SEED:!RC4:@STRENGTH"
 #define DPL_DEFAULT_SSL_COMP_NONE       0
 #define DPL_DEFAULT_SSL_CERT_VERIF      1
+#define DPL_DEFAULT_SSL_CERT_OCSP       0
+#define DPL_DEFAULT_VALIDITY_PERIOD	(5 * 60)	/*!< Maximum leeway in validity period: 5 minutes*/
 
 extern int dpl_header_size;
 
@@ -506,8 +509,9 @@ typedef struct dpl_ctx
   char *ssl_key_file;         /*!< SSL private key of the client*/
   char *ssl_password;         /*!< password for the SSL private key*/
   char *ssl_ca_list;          /*!< SSL certificate authority (CA) list*/
-  char *ssl_crl_list;          /*!< SSL certificate revocation list (CRL) list*/
+  char *ssl_crl_list;         /*!< SSL certificate revocation list (CRL) list*/
   int cert_verif;             /*!< SSL certificate verification (default to true) */
+  int cert_ocsp;              /*!< SSL certificate verification using OCSP (default to false) */
 /*!< SSL method among SSLv3,TLSv1,TLSv1.1,TLSv1.2 and SSLv23 */
 #if OPENSSL_VERSION_NUMBER >= 0x10000000L
   const SSL_METHOD *ssl_method;

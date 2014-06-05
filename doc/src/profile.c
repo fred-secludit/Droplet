@@ -222,6 +222,10 @@ Default is `true`.  You should *NOT* set this variable to `false`
 except for testing purpose with self-signed SSL certificate on server
 you trust.
 
+@par cert_ocsp = \<bool\>
+Whether to use (Online Certificate Status Protocol) OCSP to verify 
+the SSL certificate provided by the server.  Default is `false`.  
+
 @par ssl_crl_list = \<path\>
 Specifies an absolute pathname to a file containing revooked certificate.
 Only used when `use_https` is `true`.  The CRL file must be in PEM format.
