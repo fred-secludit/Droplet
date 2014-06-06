@@ -830,12 +830,12 @@ query_responder(BIO *cbio, char *path, OCSP_REQUEST *req, int req_timeout)
   rv = BIO_do_connect(cbio);
 
   if ((rv <= 0) && ((req_timeout == -1) || !BIO_should_retry(cbio))) {
-    DPL_LOG(NULL, DPL_INFO, "error connecting BIO");
-    return NULL;
+    DPL_LOG(NULL, DPL_ERROR, "error connecting BIO");
+    goto err;
   }
 
   if (BIO_get_fd(cbio, &fd) <= 0) {
-    DPL_LOG(NULL, DPL_INFO, "unable to retrieve fd from BIO");
+    DPL_LOG(NULL, DPL_ERROR, "unable to retrieve fd from BIO");
     goto err;
   }
 
@@ -846,15 +846,15 @@ query_responder(BIO *cbio, char *path, OCSP_REQUEST *req, int req_timeout)
     tv.tv_sec = req_timeout;
     rv = select(fd + 1, NULL, (void *)&confds, NULL, &tv);
     if (rv == 0) {
-       DPL_LOG(NULL, DPL_INFO, "conectio timeout");
-       return NULL;
+       DPL_LOG(NULL, DPL_ERROR, "connection timeout");
+       goto err;
     }
   }
 
   /* send OCSP request */
   ctx = OCSP_sendreq_new(cbio, path, NULL, -1);
   if (!ctx)
-    return NULL;
+    goto err;
 
   if (!OCSP_REQ_CTX_set1_req(ctx, req))
     goto err;
@@ -874,15 +874,15 @@ query_responder(BIO *cbio, char *path, OCSP_REQUEST *req, int req_timeout)
     else if (BIO_should_write(cbio))
       rv = select(fd + 1, NULL, (void *)&confds, NULL, &tv);
     else {
-      DPL_LOG(NULL, DPL_INFO, "unexpected retry condition");
+      DPL_LOG(NULL, DPL_ERROR, "unexpected retry condition");
       goto err;
     }
     if (rv == 0) {
-      DPL_LOG(NULL, DPL_INFO, "request timed out");
+      DPL_LOG(NULL, DPL_DEBUG, "request timed out");
       break;
     }
     if (rv == -1) {
-      DPL_LOG(NULL, DPL_INFO, "select error");
+      DPL_LOG(NULL, DPL_DEBUG, "select error");
       break;
     }
   }
@@ -903,7 +903,7 @@ process_responder(OCSP_REQUEST *req, char *host, char *path, char *port, int use
   /* create BIO for connecting to OCSP responder */
   cbio = BIO_new_connect(host);
   if (!cbio) {
-    DPL_LOG(NULL, DPL_INFO, "error creating connect BIO to host: %s", host);
+    DPL_LOG(NULL, DPL_ERROR, "error creating connect BIO to host: %s", host);
     goto cleanup;
   }
   if (port) BIO_set_conn_port(cbio, port);
@@ -918,11 +918,11 @@ process_responder(OCSP_REQUEST *req, char *host, char *path, char *port, int use
 #elif !defined(OPENSSL_NO_SSL2)
     ctx = SSL_CTX_new(SSLv2_client_method());
 #else
-    DPL_LOGNULL, DPL_INFO, "SSL is disabled");
+    DPL_LOG(NULL, DPL_ERROR, "SSL is disabled");
     goto cleanup;
 #endif
     if (ctx == NULL) {
-      DPL_LOG(NULL, DPL_INFO, "Error creating SSL context");
+      DPL_LOG(NULL, DPL_ERROR, "error creating SSL context");
       goto cleanup;
     }
     SSL_CTX_set_mode(ctx, SSL_MODE_AUTO_RETRY);
@@ -933,7 +933,7 @@ process_responder(OCSP_REQUEST *req, char *host, char *path, char *port, int use
   /* OCSP query */
   resp = query_responder(cbio, path, req, req_timeout);
   if (!resp)
-    DPL_LOG(NULL, DPL_ERROR, "Error querying OCSP responder");
+    DPL_LOG(NULL, DPL_ERROR, "error querying OCSP responder");
 
 cleanup:
   if (cbio) BIO_free_all(cbio);
@@ -946,10 +946,11 @@ static int
 ssl_vrfy_cb(int ret, X509_STORE_CTX *cert)
 {
   X509 *x509_cert = X509_STORE_CTX_get_current_cert(cert);
-  STACK_OF(OPENSSL_STRING) *ossl_str_sk = NULL;
+  STACK_OF(OPENSSL_STRING) *ossl_str_sk = NULL;	/* Authority Information Access (AIA) */
   char *host = NULL, *port = NULL, *path = NULL;
   int use_ssl = 0;
   OCSP_REQUEST *req = NULL;
+  OCSP_ONEREQ *one_req = NULL;
   OCSP_CERTID *id = NULL;
   OCSP_RESPONSE *resp = NULL;
   OCSP_BASICRESP *basic_resp = NULL;
@@ -958,44 +959,46 @@ ssl_vrfy_cb(int ret, X509_STORE_CTX *cert)
   ASN1_GENERALIZEDTIME *rev, *this_upd, *next_upd;
   int reason, status;
 
-  DPL_LOG(NULL, DPL_INFO, "SSL certificate verification callback: %d", ret);
-
   /* SSL certificate verification */
-  DPL_LOG(NULL, DPL_INFO, "SSL certificate subject: %s", X509_NAME_oneline(X509_get_subject_name(x509_cert), 0, 0));
-  DPL_LOG(NULL, DPL_INFO, "SSL certificate issuer: %s", X509_NAME_oneline(X509_get_issuer_name(x509_cert), 0, 0));
-  DPL_LOG(NULL, DPL_INFO, "SSL certificate verification status: %d", ret);
+  /* DPL_LOG(NULL, DPL_DEBUG, "SSL certificate subject: %s", X509_NAME_oneline(X509_get_subject_name(x509_cert), 0, 0));
+  DPL_LOG(NULL, DPL_DEBUG, "SSL certificate issuer: %s", X509_NAME_oneline(X509_get_issuer_name(x509_cert), 0, 0));
+  DPL_LOG(NULL, DPL_DEBUG, "SSL certificate verification status: %d", ret); */
 
   /* perform OCSP check */
   ossl_str_sk = X509_get1_ocsp(x509_cert);
   if (NULL == ossl_str_sk) {
-    DPL_LOG(NULL, DPL_INFO, "cert_status: no AIA and no default responder URL");
+    DPL_LOG(NULL, DPL_WARNING, "cert_status: no AIA and no default responder URL");
     ret = V_OCSP_CERTSTATUS_GOOD;
     goto cleanup;
   }
-  DPL_LOG(NULL, DPL_INFO, "cert_status: AIA URL: %s", sk_OPENSSL_STRING_value(ossl_str_sk, 0));
+  DPL_LOG(NULL, DPL_DEBUG, "cert_status: AIA URL: %s", sk_OPENSSL_STRING_value(ossl_str_sk, 0));
  
   OCSP_parse_url(sk_OPENSSL_STRING_value(ossl_str_sk, 0), &host, &port, &path, &use_ssl); 
-  DPL_LOG(NULL, DPL_INFO, "OCSP params: host: %s, port: %s, path: %s", host, port, path);
   
   /* build OCSP request */
   req = OCSP_REQUEST_new();
   x509_issuer = X509_STORE_CTX_get0_current_issuer(cert);
   id = OCSP_cert_to_id(NULL, x509_cert, x509_issuer);
-  OCSP_request_add0_id(req, id);
+  one_req = OCSP_request_add0_id(req, id);
+  if (!one_req) {
+    DPL_LOG(NULL, DPL_WARNING, "no OCSP response from OCSP responder");
+    ret = V_OCSP_CERTSTATUS_UNKNOWN;
+    goto cleanup;
+  }
   OCSP_request_add1_nonce(req, NULL, -1);
 
   /* processs OCSP request: send request to responder and get response */
   resp = process_responder(req, host, path, port, use_ssl, -1);
   if (!resp) {
-    DPL_LOG(NULL, DPL_INFO, "no OCSP response");
+    DPL_LOG(NULL, DPL_WARNING, "no OCSP response from OCSP responder");
     ret = V_OCSP_CERTSTATUS_UNKNOWN;
     goto cleanup;
   }
 
   ret_ocsp = OCSP_response_status(resp);
-  DPL_LOG(NULL, DPL_INFO, "OCSP response: %d", ret_ocsp);
+  DPL_LOG(NULL, DPL_DEBUG, "OCSP response: %d", ret_ocsp);
   if (OCSP_RESPONSE_STATUS_SUCCESSFUL != ret_ocsp) {
-    DPL_LOG(NULL, DPL_INFO, "OCSP responder error (%d): %s", ret_ocsp, OCSP_response_status_str(ret_ocsp));
+    DPL_LOG(NULL, DPL_WARNING, "OCSP responder error (%d): %s", ret_ocsp, OCSP_response_status_str(ret_ocsp));
     ret = V_OCSP_CERTSTATUS_UNKNOWN;
   }
 
@@ -1007,40 +1010,40 @@ ssl_vrfy_cb(int ret, X509_STORE_CTX *cert)
   /* check OCSP response */
   basic_resp = OCSP_response_get1_basic(resp);
   if (!basic_resp) {
-    DPL_LOG(NULL, DPL_INFO, "unable to retrieve OCSP basic response");
+    DPL_LOG(NULL, DPL_WARNING, "unable to retrieve OCSP basic response");
     ret = V_OCSP_CERTSTATUS_UNKNOWN;
     goto cleanup;
   }
 
   ret_ocsp = OCSP_check_nonce(req, basic_resp);
   if (-1 == ret_ocsp) {
-    DPL_LOG(NULL, DPL_INFO, "no nonce in answer from OCSP responder: %d", ret_ocsp);
+    DPL_LOG(NULL, DPL_WARNING, "no nonce in answer from OCSP responder: %d", ret_ocsp);
   } else if (1 != ret_ocsp) {
-    DPL_LOG(NULL, DPL_INFO, "bad nonce answer from OCSP responder: %d", ret_ocsp);
+    DPL_LOG(NULL, DPL_WARNING, "bad nonce answer from OCSP responder: %d", ret_ocsp);
     ret = V_OCSP_CERTSTATUS_UNKNOWN;
     goto cleanup;
   }
 
   ret_ocsp = OCSP_basic_verify(basic_resp, NULL, cert->ctx, 0);
   if (1 != ret_ocsp) {
-    DPL_LOG(NULL, DPL_INFO, "unable to verify OCSP response: %d", ret_ocsp);
+    DPL_LOG(NULL, DPL_WARNING, "unable to verify OCSP response: %d", ret_ocsp);
     ret = V_OCSP_CERTSTATUS_UNKNOWN;
     goto cleanup;
   }
 
   ret_ocsp = OCSP_resp_find_status(basic_resp, id, &status, &reason, &rev, &this_upd, &next_upd);
   if (1 != ret_ocsp) {
-    DPL_LOG(NULL, DPL_INFO, "unable to find OCSP response status: %d", ret_ocsp);
+    DPL_LOG(NULL, DPL_WARNING, "unable to find OCSP response status: %d", ret_ocsp);
     ret = V_OCSP_CERTSTATUS_UNKNOWN;
     goto cleanup;
   } else {
-    DPL_LOG(NULL, DPL_INFO, "valid OCSP response status(%d): %d", ret_ocsp, status);
+    DPL_LOG(NULL, DPL_DEBUG, "valid OCSP response status(%d): %d", ret_ocsp, status);
     ret = status;
   }
 
   ret_ocsp = OCSP_check_validity(this_upd, next_upd, DPL_DEFAULT_VALIDITY_PERIOD, -1);
   if (1 != ret_ocsp) {
-    DPL_LOG(NULL, DPL_INFO, "OCSP response outside validity period: %d", ret_ocsp);
+    DPL_LOG(NULL, DPL_WARNING, "OCSP response outside validity period: %d", ret_ocsp);
     ret = V_OCSP_CERTSTATUS_UNKNOWN;
     goto cleanup;
   }
@@ -1065,18 +1068,21 @@ cleanup:
   if (host) OPENSSL_free(host);
   if (port) OPENSSL_free(port);
   if (path) OPENSSL_free(path);
-  // if (ossl_str_sk) 
-  if (id) OCSP_CERTID_free(id);
-  // if (req) OCSP_REQUEST_free(req);
+  if (ossl_str_sk) X509_email_free(ossl_str_sk); /* NB: sk_OPENSSL_STRING_free() does not free all memory */
+  /* if (id) {
+    OCSP_CERTID_free(id);
+    one_req->reqCert = NULL;
+  }
+  // FDT: 
+  if (one_req) OCSP_ONEREQ_free(one_req); */
+  if (req) OCSP_REQUEST_free(req);
   if (resp) OCSP_RESPONSE_free(resp);
-  // if (x509_cert) X509_free(x509_cert);
-  // if (x509_issuer) X509_free(x509_issuer);
+  if (basic_resp) OCSP_BASICRESP_free(basic_resp);
  
-  DPL_LOG(NULL, DPL_INFO, "return code: %d", ret);
-
   return ret;
 }
 
+#ifndef OPENSSL_NO_TLSEXT
 static int
 ssl_vrfy_ocsp_status_cb(SSL *s, void *arg)
 {
@@ -1084,25 +1090,26 @@ ssl_vrfy_ocsp_status_cb(SSL *s, void *arg)
   int len;
   OCSP_RESPONSE *ocsp_resp;
 
-  DPL_LOG(NULL, DPL_INFO, "OCSP stapling callback");
-
   len = SSL_get_tlsext_status_ocsp_resp(s, &resp);
   if (!resp) {
-    DPL_LOG(NULL, DPL_INFO, "no OCSP response sent");
-    DPL_LOG(NULL, DPL_ERROR, "no OCSP response sent");
+    DPL_LOG(NULL, DPL_DEBUG, "no OCSP response sent as TLS extension");
     return !SSL_TLSEXT_ERR_OK;
   }
   ocsp_resp = d2i_OCSP_RESPONSE(NULL, &resp, len);
   if (!ocsp_resp) {
-    DPL_LOG(NULL, DPL_INFO, "OCSP response error: %s", resp);
-    DPL_LOG(NULL, DPL_ERROR, "OCSP response error: %s", resp);
+    DPL_LOG(NULL, DPL_WARNING, "OCSP response error: %s", resp);
     return SSL_TLSEXT_ERR_OK;
   }
-  OCSP_RESPONSE_print(arg, ocsp_resp, 0);
-  OCSP_RESPONSE_free(ocsp_resp);
+
+  /* dump OCSP response
+  OCSP_RESPONSE_print(arg, ocsp_resp, 0); */
+
+  if (NULL != ocsp_resp) OCSP_RESPONSE_free(ocsp_resp);
+  if (resp != NULL) OPENSSL_free(resp);
 
   return !SSL_TLSEXT_ERR_OK;
 }
+#endif
 
 static dpl_status_t
 dpl_ssl_profile_post(dpl_ctx_t *ctx)
@@ -1208,11 +1215,13 @@ dpl_ssl_profile_post(dpl_ctx_t *ctx)
   }
 
   if (1 == ctx->cert_ocsp) {
+#ifndef OPENSSL_NO_TLSEXT
     /* register OCSP stapling callback */
-    DPL_LOG(ctx, DPL_INFO, "registering OCSP stapling callback: %d", ctx->cert_ocsp);
+    DPL_TRACE(ctx, DPL_TRACE_SSL, "registering OCSP stapling callback: %d", ctx->cert_ocsp);
     SSL_CTX_set_tlsext_status_cb(ctx->ssl_ctx, ssl_vrfy_ocsp_status_cb);
+#endif
     /* register SSL certificate verification callback for OCSP */
-    DPL_LOG(ctx, DPL_INFO, "registering SSL certificate verification callback with mode: %d", ctx->cert_verif);
+    DPL_TRACE(ctx, DPL_TRACE_SSL, "registering SSL certificate verification callback with mode: %d", ctx->cert_verif);
     SSL_CTX_set_verify(ctx->ssl_ctx, (1 == ctx->cert_verif) ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, ssl_vrfy_cb);
   }
 
