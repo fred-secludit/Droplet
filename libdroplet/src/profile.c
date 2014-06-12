@@ -856,8 +856,10 @@ query_responder(BIO *cbio, char *path, OCSP_REQUEST *req, int req_timeout)
   if (!ctx)
     goto err;
 
+#if OPENSSL_VERSION_NUMBER >= 0x10000000L
   if (!OCSP_REQ_CTX_set1_req(ctx, req))
     goto err;
+#endif
 
   for (;;) {
     rv = OCSP_sendreq_nbio(&resp, ctx);
@@ -899,6 +901,7 @@ process_responder(OCSP_REQUEST *req, char *host, char *path, char *port, int use
   BIO *cbio = NULL;
   SSL_CTX *ctx = NULL;
   OCSP_RESPONSE *resp = NULL;
+  SSL *ssl = NULL;
 
   /* create BIO for connecting to OCSP responder */
   cbio = BIO_new_connect(host);
@@ -926,8 +929,12 @@ process_responder(OCSP_REQUEST *req, char *host, char *path, char *port, int use
       goto cleanup;
     }
     SSL_CTX_set_mode(ctx, SSL_MODE_AUTO_RETRY);
+    
     sbio = BIO_new_ssl(ctx, 1);
     cbio = BIO_push(sbio, cbio);
+
+    BIO_get_ssl(sbio, &ssl);
+    SSL_set_shutdown(ssl, SSL_SENT_SHUTDOWN|SSL_RECEIVED_SHUTDOWN); 
   }
 
   /* OCSP query */
@@ -946,7 +953,11 @@ static int
 ssl_vrfy_cb(int ret, X509_STORE_CTX *cert)
 {
   X509 *x509_cert = X509_STORE_CTX_get_current_cert(cert);
+#if OPENSSL_VERSION_NUMBER >= 0x10000000L
   STACK_OF(OPENSSL_STRING) *ossl_str_sk = NULL;	/* Authority Information Access (AIA) */
+#else
+  STACK *ossl_str_sk = NULL;
+#endif
   char *host = NULL, *port = NULL, *path = NULL;
   int use_ssl = 0;
   OCSP_REQUEST *req = NULL;
@@ -971,13 +982,22 @@ ssl_vrfy_cb(int ret, X509_STORE_CTX *cert)
     ret = V_OCSP_CERTSTATUS_GOOD;
     goto cleanup;
   }
+
+#if OPENSSL_VERSION_NUMBER >= 0x10000000L
   DPL_LOG(NULL, DPL_DEBUG, "cert_status: AIA URL: %s", sk_OPENSSL_STRING_value(ossl_str_sk, 0));
- 
   OCSP_parse_url(sk_OPENSSL_STRING_value(ossl_str_sk, 0), &host, &port, &path, &use_ssl); 
-  
+#else
+  DPL_LOG(NULL, DPL_DEBUG, "cert_status: AIA URL: %s", sk_value(ossl_str_sk, 0));
+  OCSP_parse_url(sk_value(ossl_str_sk, 0), &host, &port, &path, &use_ssl);
+#endif 
+
   /* build OCSP request */
   req = OCSP_REQUEST_new();
+#if OPENSSL_VERSION_NUMBER >= 0x10000000L
   x509_issuer = X509_STORE_CTX_get0_current_issuer(cert);
+#else
+  x509_issuer = cert->current_issuer;
+#endif
   id = OCSP_cert_to_id(NULL, x509_cert, x509_issuer);
   one_req = OCSP_request_add0_id(req, id);
   if (!one_req) {
@@ -1172,10 +1192,14 @@ dpl_ssl_profile_post(dpl_ctx_t *ctx)
       BIO_free(in);
 
     /* set CRL verification */
+#if OPENSSL_VERSION_NUMBER >= 0x10000000L
     cert_verif_param = X509_VERIFY_PARAM_new();
     X509_VERIFY_PARAM_set_flags(cert_verif_param, X509_V_FLAG_CRL_CHECK);
     SSL_CTX_set1_param(ctx->ssl_ctx, cert_verif_param);
     X509_VERIFY_PARAM_free(cert_verif_param);
+#else
+    X509_STORE_set_flags(cert_store, X509_V_FLAG_CRL_CHECK);
+#endif
   }
 
   if (ctx->ssl_cert_file != NULL) {
